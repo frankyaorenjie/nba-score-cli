@@ -1,0 +1,17 @@
+{
+  "name": "nba-score-cli",
+  "version": "1.0.0",
+  "description": "CLI tool to display NBA scores",
+  "main": "index.js",
+  "bin": {
+    "nba-scores": "./index.js"
+  },
+    "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["nba", "scores", "cli", "basketball"],
+  "license": "MIT",
+  "dependencies": {
+    "blessed": "^0.1.81"
+  }
+}
