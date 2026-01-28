@@ -20,7 +20,7 @@ A terminal UI (TUI) application that displays live NBA scores with auto-refresh.
 ## Installation
 
 ```bash
-git clone https://github.com/bytedance/nba-score-cli.git
+git clone https://github.com/frankyaorenjie/nba-score-cli.git
 cd nba-score-cli
 npm install
 ```
