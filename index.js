@@ -5,11 +5,38 @@ const blessed = require('blessed');
 const NBA_API_URL = 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json';
 const BOXSCORE_URL = 'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_GAMEID.json';
 const PLAYBYPLAY_URL = 'https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_GAMEID.json';
+const ESPN_STANDINGS_URL = 'https://site.api.espn.com/apis/v2/sports/basketball/nba/standings';
 const REFRESH_INTERVAL = 5000;
+const STANDINGS_REFRESH_INTERVAL = 60000;
+
+const TEAM_ABBR_MAP = {
+  'GS': 'GSW',
+  'NO': 'NOP',
+  'NY': 'NYK',
+  'SA': 'SAS',
+  'UTAH': 'UTA',
+  'WSH': 'WAS'
+};
+
+function normalizeTeamAbbr(abbr) {
+  return TEAM_ABBR_MAP[abbr] || abbr;
+}
+
+function toNumber(value, fallback = 0) {
+  const n = typeof value === 'number' ? value : parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function formatWinPct(value) {
+  const n = toNumber(value, 0);
+  return n.toFixed(3).slice(1);
+}
 
 let currentGames = [];
-let currentView = 'list'; // 'list' or 'detail'
-let selectedGameId = null;
+let mainView = 'scores'; // 'scores' or 'standings'
+let detailView = null; // null or gameId when viewing game details
+let scoresData = null;
+let standingsData = null;
 
 const TEAM_COLORS = {
   'ATL': '#FF4D4F', 'BKN': '#FFFFFF', 'BOS': '#00FF66', 'CHA': '#4B2BBF', 'CHI': '#FF2D55',
@@ -25,12 +52,25 @@ const screen = blessed.screen({
   title: 'NBA Scores'
 });
 
-// Main list view components
-const header = blessed.box({
+// Menu bar for switching views
+const menuBar = blessed.box({
   top: 0,
   left: 0,
   width: '100%',
-  height: 3,
+  height: 1,
+  tags: true,
+  style: {
+    fg: 'white',
+    bg: 'gray'
+  }
+});
+
+// Main list view components
+const header = blessed.box({
+  top: 1,
+  left: 0,
+  width: '100%',
+  height: 2,
   content: '',
   tags: true,
   style: {
@@ -61,6 +101,27 @@ const gameList = blessed.list({
       fg: 'black',
       bg: 'white'
     }
+  }
+});
+
+const standingsContent = blessed.box({
+  top: 3,
+  left: 0,
+  width: '100%',
+  height: '100%-6',
+  keys: true,
+  vi: true,
+  mouse: true,
+  tags: true,
+  scrollable: true,
+  hidden: true,
+  scrollbar: {
+    ch: ' ',
+    style: { bg: 'yellow' }
+  },
+  style: {
+    fg: 'white',
+    bg: 'black'
   }
 });
 
@@ -157,8 +218,10 @@ const detailFooter = blessed.box({
   }
 });
 
+screen.append(menuBar);
 screen.append(header);
 screen.append(gameList);
+screen.append(standingsContent);
 screen.append(footer);
 screen.append(detailHeader);
 screen.append(gameFlowBox);
@@ -167,7 +230,7 @@ screen.append(detailFooter);
 
 // Key bindings
 screen.key(['escape', 'q', 'C-c'], () => {
-  if (currentView === 'detail') {
+  if (detailView) {
     showListView();
   } else {
     process.exit(0);
@@ -184,6 +247,30 @@ gameList.key(['space', 'enter'], () => {
 boxScoreBox.key(['escape', 'q'], () => {
   showListView();
 });
+
+screen.key(['1'], () => {
+  if (detailView) return; // Don't switch when in detail view
+  mainView = 'scores';
+  updateMenu();
+  renderCurrentView();
+});
+
+screen.key(['2'], () => {
+  if (detailView) return; // Don't switch when in detail view
+  mainView = 'standings';
+  updateMenu();
+  renderCurrentView();
+});
+
+function updateMenu() {
+  const scoresStyle = mainView === 'scores' ? '{bold}{white-bg}{black-fg}' : '{white-fg}';
+  const scoresEnd = mainView === 'scores' ? '{/black-fg}{/white-bg}{/bold}' : '{/white-fg}';
+  const standingsStyle = mainView === 'standings' ? '{bold}{white-bg}{black-fg}' : '{white-fg}';
+  const standingsEnd = mainView === 'standings' ? '{/black-fg}{/white-bg}{/bold}' : '{/white-fg}';
+
+  menuBar.setContent(` ${scoresStyle} [1] Scores ${scoresEnd}  ${standingsStyle} [2] Standings ${standingsEnd}`);
+  screen.render();
+}
 
 async function fetchScores() {
   try {
@@ -210,6 +297,16 @@ async function fetchPlayByPlay(gameId) {
   try {
     const url = PLAYBYPLAY_URL.replace('GAMEID', gameId);
     const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+async function fetchStandings() {
+  try {
+    const response = await fetch(ESPN_STANDINGS_URL);
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     return await response.json();
   } catch (error) {
@@ -332,7 +429,8 @@ function buildGameRow(game) {
   return { scoreCol, status, mvpCol };
 }
 
-function renderScores(data) {
+function renderScoresView() {
+  const data = scoresData;
   if (!data) {
     gameList.setItems(['{red-fg}Failed to fetch scores. Retrying...{/red-fg}']);
     screen.render();
@@ -370,6 +468,110 @@ function renderScores(data) {
   const prevSelected = gameList.selected;
   gameList.setItems(items);
   gameList.select(Math.max(2, prevSelected)); // Skip header rows
+  screen.render();
+}
+
+function renderStandingsView() {
+  const data = standingsData;
+
+  header.setContent(`{center}NBA Standings - 2025-26 Season{/center}`);
+
+  if (!data) {
+    standingsContent.setContent('\n{center}{red-fg}Loading standings...{/red-fg}{/center}');
+    screen.render();
+    return;
+  }
+
+  const conferences = data.children;
+  if (!conferences || conferences.length === 0) {
+    standingsContent.setContent('\n{center}{red-fg}No standings data available{/red-fg}{/center}');
+    screen.render();
+    return;
+  }
+
+  const eastTeams = [];
+  const westTeams = [];
+
+  for (const conf of conferences) {
+    const confName = conf.name || '';
+    const entries = conf.standings?.entries || [];
+
+    for (const entry of entries) {
+      const team = entry.team || {};
+      const stats = entry.stats || [];
+      const rawAbbr = team.abbreviation || '';
+      const teamAbbr = normalizeTeamAbbr(rawAbbr);
+      const winsRaw = stats.find(s => s.name === 'wins')?.value;
+      const lossesRaw = stats.find(s => s.name === 'losses')?.value;
+      const winPctRaw = stats.find(s => s.name === 'winPercent')?.value;
+
+      const teamData = {
+        teamAbbr,
+        wins: Math.floor(toNumber(winsRaw, 0)),
+        losses: Math.floor(toNumber(lossesRaw, 0)),
+        winPct: formatWinPct(winPctRaw)
+      };
+
+      if (confName.includes('East')) {
+        eastTeams.push(teamData);
+      } else if (confName.includes('West')) {
+        westTeams.push(teamData);
+      }
+    }
+  }
+
+  eastTeams.sort((a, b) => b.wins - a.wins || a.losses - b.losses);
+  westTeams.sort((a, b) => b.wins - a.wins || a.losses - b.losses);
+
+  const eastLeader = eastTeams[0];
+  const westLeader = westTeams[0];
+
+  const colWidth = 28;
+  const totalWidth = colWidth * 2 + 6;
+  const leftPad = Math.max(0, Math.floor((screen.width - totalWidth) / 2));
+  const pad = ' '.repeat(leftPad);
+
+  let content = '\n';
+  content += `${pad}{bold}{cyan-fg}${'EASTERN CONFERENCE'.padEnd(colWidth)}    ${'WESTERN CONFERENCE'}{/cyan-fg}{/bold}\n`;
+  const headerRow = '    TEAM   W-L    PCT   GB';
+  content += `${pad}{gray-fg}${headerRow}    ${headerRow}{/gray-fg}\n`;
+  content += `${pad}{gray-fg}${'─'.repeat(colWidth)}    ${'─'.repeat(colWidth)}{/gray-fg}\n`;
+
+  const maxTeams = Math.max(eastTeams.length, westTeams.length);
+  for (let i = 0; i < Math.min(maxTeams, 15); i++) {
+    const eastTeam = eastTeams[i];
+    const westTeam = westTeams[i];
+
+    const eastHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{gray-fg}';
+    const eastEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/gray-fg}';
+    const westHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{gray-fg}';
+    const westEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/gray-fg}';
+
+    const rank = String(i + 1).padStart(2);
+
+    let eastCol = '';
+    if (eastTeam) {
+      const record = `${eastTeam.wins}-${eastTeam.losses}`;
+      const gb = i === 0 ? '  -' : ((eastLeader.wins - eastTeam.wins + eastTeam.losses - eastLeader.losses) / 2).toFixed(1).padStart(4);
+      eastCol = `${eastHighlight}${rank}. ${eastTeam.teamAbbr.padEnd(4)} ${record.padStart(6)} ${eastTeam.winPct} ${gb}${eastEnd}`;
+    }
+
+    let westCol = '';
+    if (westTeam) {
+      const record = `${westTeam.wins}-${westTeam.losses}`;
+      const gb = i === 0 ? '  -' : ((westLeader.wins - westTeam.wins + westTeam.losses - westLeader.losses) / 2).toFixed(1).padStart(4);
+      westCol = `${westHighlight}${rank}. ${westTeam.teamAbbr.padEnd(4)} ${record.padStart(6)} ${westTeam.winPct} ${gb}${westEnd}`;
+    }
+
+    const eastPlain = stripTags(eastCol);
+    const eastPadded = eastCol + ' '.repeat(Math.max(0, colWidth - eastPlain.length));
+
+    content += `${pad}${eastPadded}    ${westCol}\n`;
+  }
+
+  content += `\n${pad}{gray-fg}GB = Games Behind | Green: Playoff (1-6) | Yellow: Play-in (7-10) | Gray: Lottery{/gray-fg}\n`;
+
+  standingsContent.setContent(content);
   screen.render();
 }
 
@@ -413,7 +615,7 @@ function renderGameFlow(boxScore, playByPlay) {
         const periodStartMinute = (period - 1) * 12;
         const minutesElapsedInPeriod = 12 - minutesLeft - secondsLeft / 60;
         const totalMinutesElapsed = periodStartMinute + minutesElapsedInPeriod;
-        
+
         const minuteKey = Math.floor(totalMinutesElapsed);
         const diff = homeScore - awayScore;
 
@@ -429,7 +631,7 @@ function renderGameFlow(boxScore, playByPlay) {
     // Fill every minute from 0 to current max minute or totalGameMinutes
     let currentDiff = 0;
     const maxMinute = Math.max(...Array.from(rawMinuteData.keys()), 0);
-    // If the game is finished, we go up to totalGameMinutes. 
+    // If the game is finished, we go up to totalGameMinutes.
     // If it's live, we might go up to the latest action's minute.
     const endMinute = game.gameStatus === 3 ? totalGameMinutes : maxMinute;
 
@@ -455,7 +657,7 @@ function renderGameFlow(boxScore, playByPlay) {
 
   const yMax = Math.ceil(Math.max(dataMax, 1) / interval) * interval;
   const yMin = Math.floor(Math.min(dataMin, -1) / interval) * interval;
-  
+
   // chartHeight in terms of rows, each row represents 'interval' points
   const chartHeight = ((yMax - yMin) / interval) + 1;
   // Make the chart width more compact
@@ -488,7 +690,7 @@ function renderGameFlow(boxScore, playByPlay) {
 
   // Build content
   let content = '\n';
-  
+
   const homeColor = TEAM_COLORS[homeTeam] || '{green-fg}';
   const awayColor = TEAM_COLORS[awayTeam] || '{red-fg}';
   const homeColorTag = homeColor.startsWith('#') ? `{${homeColor}-fg}` : homeColor;
@@ -564,12 +766,12 @@ function renderGameFlow(boxScore, playByPlay) {
     }
   }
   content += labelRow.join('').trimEnd() + '\n';
-  
+
   // Add recent play-by-play actions
   if (playByPlay?.game?.actions) {
     content += '\n  {bold}Recent Plays:{/bold}\n';
     content += `  ${'─'.repeat(chartWidth)}\n`;
-    
+
     const actions = [...playByPlay.game.actions].reverse().slice(0, 5); // Show latest 5
     for (const action of actions) {
       if (action.description) {
@@ -634,12 +836,13 @@ function renderBoxScore(boxScore) {
 }
 
 async function showDetailView(game) {
-  currentView = 'detail';
-  selectedGameId = game.gameId;
+  detailView = game.gameId;
 
-  // Hide list view
+  // Hide main views
+  menuBar.hide();
   header.hide();
   gameList.hide();
+  standingsContent.hide();
   footer.hide();
 
   // Show detail view
@@ -676,8 +879,7 @@ async function showDetailView(game) {
 }
 
 function showListView() {
-  currentView = 'list';
-  selectedGameId = null;
+  detailView = null;
 
   // Hide detail view
   detailHeader.hide();
@@ -685,13 +887,36 @@ function showListView() {
   boxScoreBox.hide();
   detailFooter.hide();
 
-  // Show list view
+  // Show main views
+  menuBar.show();
   header.show();
-  gameList.show();
   footer.show();
 
-  gameList.focus();
+  if (mainView === 'scores') {
+    gameList.show();
+    standingsContent.hide();
+    gameList.focus();
+  } else {
+    gameList.hide();
+    standingsContent.show();
+    standingsContent.focus();
+  }
+
   screen.render();
+}
+
+function renderCurrentView() {
+  if (mainView === 'scores') {
+    gameList.show();
+    standingsContent.hide();
+    renderScoresView();
+    gameList.focus();
+  } else {
+    gameList.hide();
+    standingsContent.show();
+    renderStandingsView();
+    standingsContent.focus();
+  }
 }
 
 function updateFooter() {
@@ -701,26 +926,31 @@ function updateFooter() {
     second: '2-digit',
     hour12: false
   });
-  footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | ↑↓ navigate | SPACE details | q quit{/center}`);
+  if (mainView === 'scores') {
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | ↑↓ navigate | SPACE details | 1/2 switch views | q quit{/center}`);
+  } else {
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | 1/2 switch views | q quit{/center}`);
+  }
   screen.render();
 }
 
-async function refresh() {
-  const data = await fetchScores();
-  if (currentView === 'list') {
-    renderScores(data);
-  } else if (currentView === 'detail' && selectedGameId && data) {
-    const game = data.scoreboard.games.find(g => g.gameId === selectedGameId);
+async function refreshScores() {
+  scoresData = await fetchScores();
+  if (!detailView && mainView === 'scores') {
+    renderScoresView();
+  } else if (detailView && scoresData) {
+    // Update detail view header with latest score
+    const game = scoresData.scoreboard.games.find(g => g.gameId === detailView);
     if (game) {
       const row = buildGameRow(game);
       const cleanScoreCol = stripTags(row.scoreCol);
       const cleanStatus = stripTags(row.status);
       detailHeader.setContent(`{center}{white-fg}${cleanScoreCol}  |  ${cleanStatus}{/white-fg}{/center}`);
-      
+
       // Update detail view data
       const [boxScore, playByPlay] = await Promise.all([
-        fetchBoxScore(selectedGameId),
-        fetchPlayByPlay(selectedGameId)
+        fetchBoxScore(detailView),
+        fetchPlayByPlay(detailView)
       ]);
       if (boxScore) {
         renderGameFlow(boxScore, playByPlay);
@@ -731,12 +961,23 @@ async function refresh() {
   }
 }
 
+async function refreshStandings() {
+  standingsData = await fetchStandings();
+  if (!detailView && mainView === 'standings') {
+    renderStandingsView();
+  }
+}
+
 async function main() {
-  gameList.setItems(['Loading NBA scores...']);
+  updateMenu();
+  gameList.setItems(['Loading NBA data...']);
   screen.render();
 
-  await refresh();
-  setInterval(refresh, REFRESH_INTERVAL);
+  await Promise.all([refreshScores(), refreshStandings()]);
+  renderCurrentView();
+
+  setInterval(refreshScores, REFRESH_INTERVAL);
+  setInterval(refreshStandings, STANDINGS_REFRESH_INTERVAL);
   setInterval(updateFooter, 1000);
   updateFooter();
 
