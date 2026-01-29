@@ -189,8 +189,9 @@ const boxScoreBox = blessed.box({
   tags: true,
   hidden: true,
   scrollable: true,
+  alwaysScroll: true,
   scrollbar: {
-    ch: ' ',
+    ch: '█',
     style: { bg: 'yellow' }
   },
   keys: true,
@@ -908,6 +909,7 @@ function renderGameFlow(boxScore, playByPlay) {
   }
 
   gameFlowBox.setContent(content);
+  gameFlowBox.scrollTo(0);
 }
 
 function renderBoxScore(boxScore) {
@@ -952,6 +954,7 @@ function renderBoxScore(boxScore) {
   content += formatPlayerStats(game.homeTeam.players, game.homeTeam.teamTricode);
 
   boxScoreBox.setContent(content);
+  boxScoreBox.scrollTo(0);
 }
 
 async function showDetailView(game) {
