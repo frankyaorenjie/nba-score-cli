@@ -20,6 +20,16 @@ function normalizeTeamAbbr(abbr) {
   return TEAM_ABBR_MAP[abbr] || abbr;
 }
 
+function toNumber(value, fallback = 0) {
+  const n = typeof value === 'number' ? value : parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function formatWinPct(value) {
+  const n = toNumber(value, 0);
+  return n.toFixed(3).slice(1);
+}
+
 let currentView = 'scores';
 let scoresData = null;
 let standingsData = null;
@@ -355,15 +365,15 @@ function renderStandingsView() {
       const stats = entry.stats || [];
       const rawAbbr = team.abbreviation || '';
       const teamAbbr = normalizeTeamAbbr(rawAbbr);
-      const wins = stats.find(s => s.name === 'wins')?.value || 0;
-      const losses = stats.find(s => s.name === 'losses')?.value || 0;
-      const winPct = stats.find(s => s.name === 'winPercent')?.value || 0;
+      const winsRaw = stats.find(s => s.name === 'wins')?.value;
+      const lossesRaw = stats.find(s => s.name === 'losses')?.value;
+      const winPctRaw = stats.find(s => s.name === 'winPercent')?.value;
 
       const teamData = { 
         teamAbbr, 
-        wins: Math.floor(wins), 
-        losses: Math.floor(losses),
-        winPct: winPct.toFixed(3).slice(1)
+        wins: Math.floor(toNumber(winsRaw, 0)), 
+        losses: Math.floor(toNumber(lossesRaw, 0)),
+        winPct: formatWinPct(winPctRaw)
       };
 
       if (confName.includes('East')) {
