@@ -218,6 +218,26 @@ const detailFooter = blessed.box({
   }
 });
 
+// Quit confirmation dialog
+const confirmDialog = blessed.box({
+  top: 'center',
+  left: 'center',
+  width: 40,
+  height: 7,
+  tags: true,
+  hidden: true,
+  border: {
+    type: 'line'
+  },
+  style: {
+    fg: 'white',
+    bg: 'black',
+    border: { fg: 'yellow' }
+  }
+});
+
+confirmDialog.setContent(`{center}Quit NBA Scores?{/center}\n\n{center}{green-fg}[Y]{/green-fg} Yes    {red-fg}[N]{/red-fg} No{/center}`);
+
 screen.append(menuBar);
 screen.append(header);
 screen.append(gameList);
@@ -227,14 +247,57 @@ screen.append(detailHeader);
 screen.append(gameFlowBox);
 screen.append(boxScoreBox);
 screen.append(detailFooter);
+screen.append(confirmDialog);
+
+let confirmVisible = false;
+
+function showConfirmDialog() {
+  confirmVisible = true;
+  confirmDialog.show();
+  confirmDialog.focus();
+  screen.render();
+}
+
+function hideConfirmDialog() {
+  confirmVisible = false;
+  confirmDialog.hide();
+  if (mainView === 'scores') {
+    gameList.focus();
+  } else {
+    standingsContent.focus();
+  }
+  screen.render();
+}
+
+// Confirm dialog key bindings
+confirmDialog.key(['y', 'Y', 'enter'], () => {
+  process.exit(0);
+});
+
+confirmDialog.key(['n', 'N', 'escape'], () => {
+  hideConfirmDialog();
+});
 
 // Key bindings
-screen.key(['escape', 'q', 'C-c'], () => {
+screen.key(['escape'], () => {
+  if (confirmVisible) {
+    hideConfirmDialog();
+  } else if (detailView) {
+    showListView();
+  }
+});
+
+screen.key(['q'], () => {
+  if (confirmVisible) return;
   if (detailView) {
     showListView();
   } else {
-    process.exit(0);
+    showConfirmDialog();
   }
+});
+
+screen.key(['C-c'], () => {
+  process.exit(0);
 });
 
 gameList.key(['space', 'enter'], () => {
@@ -248,15 +311,15 @@ boxScoreBox.key(['escape', 'q'], () => {
   showListView();
 });
 
-screen.key(['1'], () => {
-  if (detailView) return; // Don't switch when in detail view
+screen.key(['1', 'left', 'h'], () => {
+  if (confirmVisible || detailView) return;
   mainView = 'scores';
   updateMenu();
   renderCurrentView();
 });
 
-screen.key(['2'], () => {
-  if (detailView) return; // Don't switch when in detail view
+screen.key(['2', 'right', 'l'], () => {
+  if (confirmVisible || detailView) return;
   mainView = 'standings';
   updateMenu();
   renderCurrentView();
@@ -531,10 +594,16 @@ function renderStandingsView() {
   const leftPad = Math.max(0, Math.floor((screen.width - totalWidth) / 2));
   const pad = ' '.repeat(leftPad);
 
+  const centerText = (text, width) => {
+    const leftPadding = Math.floor((width - text.length) / 2);
+    const rightPadding = width - text.length - leftPadding;
+    return ' '.repeat(leftPadding) + text + ' '.repeat(rightPadding);
+  };
+
   let content = '\n';
-  content += `${pad}{bold}{cyan-fg}${'EASTERN CONFERENCE'.padEnd(colWidth)}    ${'WESTERN CONFERENCE'}{/cyan-fg}{/bold}\n`;
-  const headerRow = '    TEAM   W-L    PCT   GB';
-  content += `${pad}{gray-fg}${headerRow}    ${headerRow}{/gray-fg}\n`;
+  content += `${pad}{bold}{cyan-fg}${centerText('EASTERN CONFERENCE', colWidth)}    ${centerText('WESTERN CONFERENCE', colWidth)}{/cyan-fg}{/bold}\n`;
+  const headerRow = ' #  TEAM   W-L   PCT   GB';
+  content += `${pad}{gray-fg}${headerRow.padEnd(colWidth)}    ${headerRow}{/gray-fg}\n`;
   content += `${pad}{gray-fg}${'─'.repeat(colWidth)}    ${'─'.repeat(colWidth)}{/gray-fg}\n`;
 
   const maxTeams = Math.max(eastTeams.length, westTeams.length);
@@ -542,25 +611,25 @@ function renderStandingsView() {
     const eastTeam = eastTeams[i];
     const westTeam = westTeams[i];
 
-    const eastHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{gray-fg}';
-    const eastEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/gray-fg}';
-    const westHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{gray-fg}';
-    const westEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/gray-fg}';
+    const eastHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{white-fg}';
+    const eastEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/white-fg}';
+    const westHighlight = i < 6 ? '{green-fg}' : i < 10 ? '{yellow-fg}' : '{white-fg}';
+    const westEnd = i < 6 ? '{/green-fg}' : i < 10 ? '{/yellow-fg}' : '{/white-fg}';
 
-    const rank = String(i + 1).padStart(2);
+    const rank = String(i + 1).padEnd(2);
 
     let eastCol = '';
     if (eastTeam) {
       const record = `${eastTeam.wins}-${eastTeam.losses}`;
-      const gb = i === 0 ? '  -' : ((eastLeader.wins - eastTeam.wins + eastTeam.losses - eastLeader.losses) / 2).toFixed(1).padStart(4);
-      eastCol = `${eastHighlight}${rank}. ${eastTeam.teamAbbr.padEnd(4)} ${record.padStart(6)} ${eastTeam.winPct} ${gb}${eastEnd}`;
+      const gb = i === 0 ? '-   ' : ((eastLeader.wins - eastTeam.wins + eastTeam.losses - eastLeader.losses) / 2).toFixed(1).padEnd(4);
+      eastCol = `${eastHighlight}${rank}. ${eastTeam.teamAbbr.padEnd(4)} ${record.padEnd(5)}  ${eastTeam.winPct}  ${gb}${eastEnd}`;
     }
 
     let westCol = '';
     if (westTeam) {
       const record = `${westTeam.wins}-${westTeam.losses}`;
-      const gb = i === 0 ? '  -' : ((westLeader.wins - westTeam.wins + westTeam.losses - westLeader.losses) / 2).toFixed(1).padStart(4);
-      westCol = `${westHighlight}${rank}. ${westTeam.teamAbbr.padEnd(4)} ${record.padStart(6)} ${westTeam.winPct} ${gb}${westEnd}`;
+      const gb = i === 0 ? '-   ' : ((westLeader.wins - westTeam.wins + westTeam.losses - westLeader.losses) / 2).toFixed(1).padEnd(4);
+      westCol = `${westHighlight}${rank}. ${westTeam.teamAbbr.padEnd(4)} ${record.padEnd(5)}  ${westTeam.winPct}  ${gb}${westEnd}`;
     }
 
     const eastPlain = stripTags(eastCol);
@@ -569,7 +638,9 @@ function renderStandingsView() {
     content += `${pad}${eastPadded}    ${westCol}\n`;
   }
 
-  content += `\n${pad}{gray-fg}GB = Games Behind | Green: Playoff (1-6) | Yellow: Play-in (7-10) | Gray: Lottery{/gray-fg}\n`;
+  const legendPlain = 'GB = Games Behind | Green: Playoff (1-6) | Yellow: Play-in (7-10) | White: Lottery';
+  const legendPad = ' '.repeat(Math.max(0, Math.floor((screen.width - legendPlain.length) / 2)));
+  content += `\n${legendPad}{gray-fg}GB = Games Behind | {/gray-fg}{green-fg}Green{/green-fg}{gray-fg}: Playoff (1-6) | {/gray-fg}{yellow-fg}Yellow{/yellow-fg}{gray-fg}: Play-in (7-10) | {/gray-fg}{white-fg}White{/white-fg}{gray-fg}: Lottery{/gray-fg}\n`;
 
   standingsContent.setContent(content);
   screen.render();
@@ -927,9 +998,9 @@ function updateFooter() {
     hour12: false
   });
   if (mainView === 'scores') {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | ↑↓ navigate | SPACE details | 1/2 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ navigate | SPACE details | hl/←→/1-2 switch views | q quit{/center}`);
   } else {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | 1/2 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ scroll | hl/←→/1-2 switch views | q quit{/center}`);
   }
   screen.render();
 }
