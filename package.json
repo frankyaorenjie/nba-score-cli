@@ -7,7 +7,11 @@
     "nba-scores": "./index.js"
   },
     "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
   },
   "keywords": ["nba", "scores", "cli", "basketball"],
   "license": "MIT",
