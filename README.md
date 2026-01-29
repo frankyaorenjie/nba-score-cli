@@ -30,6 +30,8 @@ A terminal UI (TUI) application that displays live NBA scores, standings, and ga
 - Lead changes tracking
 - Play-by-play feed (latest 5 plays)
 - Full box score with player statistics
+- Switch between Game Flow and Box Score sections with Tab
+- Active section highlighted with yellow border
 
 ## Installation
 
@@ -49,7 +51,7 @@ node index.js
 
 ## Controls
 
-### Navigation
+### Main Views (Scores / Standings)
 | Key | Action |
 |-----|--------|
 | `1` / `h` / `←` | Switch to Scores view |
@@ -57,9 +59,22 @@ node index.js
 | `j` / `↓` | Move down / Scroll |
 | `k` / `↑` | Move up / Scroll |
 | `Space` / `Enter` | Open game details (from Scores) |
-| `Esc` | Go back / Close dialog |
-| `q` | Quit (with confirmation) |
+| `q` | Quit (with confirmation, press twice to exit) |
 | `Ctrl+C` | Quit immediately |
+
+### Game Detail View
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between Game Flow and Box Score |
+| `j` / `↓` | Scroll down in focused section |
+| `k` / `↑` | Scroll up in focused section |
+| `q` / `Esc` | Go back to main view |
+
+### Quit Confirmation Dialog
+| Key | Action |
+|-----|--------|
+| `Y` / `Q` / `Enter` | Confirm quit |
+| `N` / `Esc` | Cancel |
 
 ## Screenshots
 
@@ -99,6 +114,13 @@ node index.js
   │      └──────────────────────                │
   │       Q1    Q2    Q3    Q4                  │
   └─────────────────────────────────────────────┘
+  ┌─ Box Score (focused) ───────────────────────┐
+  │  PLAYER             MIN  PTS  REB  AST  ... │
+  │  L. James           38   32   8    11   ... │
+  │  A. Davis           36   28   14   3    ... │
+  └─────────────────────────────────────────────┘
+
+  ● [Box Score] | jk/↑↓ scroll | Tab switch section | q/Esc back
 ```
 
 ## Data Sources
