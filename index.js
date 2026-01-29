@@ -35,6 +35,7 @@ function formatWinPct(value) {
 let currentGames = [];
 let mainView = 'scores'; // 'scores' or 'standings'
 let detailView = null; // null or gameId when viewing game details
+let detailFocus = 'boxScore'; // 'gameFlow' or 'boxScore'
 let scoresData = null;
 let standingsData = null;
 
@@ -163,6 +164,7 @@ const gameFlowBox = blessed.box({
   scrollable: true,
   alwaysScroll: true,
   keys: true,
+  vi: true,
   mouse: true,
   scrollbar: {
     ch: '█',
@@ -309,6 +311,52 @@ gameList.key(['space', 'enter'], () => {
 
 boxScoreBox.key(['escape', 'q'], () => {
   showListView();
+});
+
+gameFlowBox.key(['escape', 'q'], () => {
+  showListView();
+});
+
+// Click to focus sections
+gameFlowBox.on('click', () => {
+  if (detailFocus !== 'gameFlow') {
+    detailFocus = 'gameFlow';
+    updateDetailFocus();
+  }
+});
+
+boxScoreBox.on('click', () => {
+  if (detailFocus !== 'boxScore') {
+    detailFocus = 'boxScore';
+    updateDetailFocus();
+  }
+});
+
+// Function to update detail view focus and highlight
+function updateDetailFocus() {
+  if (detailFocus === 'gameFlow') {
+    gameFlowBox.style.border.fg = 'yellow';
+    boxScoreBox.style.border.fg = 'cyan';
+    gameFlowBox.focus();
+  } else {
+    gameFlowBox.style.border.fg = 'cyan';
+    boxScoreBox.style.border.fg = 'yellow';
+    boxScoreBox.focus();
+  }
+  updateDetailFooter();
+  screen.render();
+}
+
+function updateDetailFooter() {
+  const section = detailFocus === 'gameFlow' ? 'Game Flow' : 'Box Score';
+  detailFooter.setContent(`{center}{green-fg}●{/green-fg} {yellow-fg}[${section}]{/yellow-fg} | jk/↑↓ scroll | Tab switch section | q/Esc back{/center}`);
+}
+
+// Tab to switch focus between sections in detail view
+screen.key(['tab'], () => {
+  if (!detailView) return;
+  detailFocus = detailFocus === 'gameFlow' ? 'boxScore' : 'gameFlow';
+  updateDetailFocus();
 });
 
 screen.key(['1', 'left', 'h'], () => {
@@ -926,11 +974,13 @@ async function showDetailView(game) {
   const cleanScoreCol = stripTags(row.scoreCol);
   const cleanStatus = stripTags(row.status);
   detailHeader.setContent(`{center}{white-fg}${cleanScoreCol}  |  ${cleanStatus}{/white-fg}{/center}`);
-  detailFooter.setContent(`{center}{green-fg}●{/green-fg} Press ESC or q to go back{/center}`);
 
   gameFlowBox.setContent('\n  Loading game data...');
   boxScoreBox.setContent('\n  Loading box score...');
-  screen.render();
+
+  // Set initial focus to box score
+  detailFocus = 'boxScore';
+  updateDetailFocus();
 
   const [boxScore, playByPlay] = await Promise.all([
     fetchBoxScore(game.gameId),
@@ -945,8 +995,7 @@ async function showDetailView(game) {
     boxScoreBox.setContent('\n  {red-fg}Failed to load box score{/red-fg}');
   }
 
-  boxScoreBox.focus();
-  screen.render();
+  updateDetailFocus();
 }
 
 function showListView() {
