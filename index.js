@@ -239,7 +239,7 @@ const confirmDialog = blessed.box({
   }
 });
 
-confirmDialog.setContent(`{center}Quit NBA Scores?{/center}\n\n{center}{green-fg}[Y]{/green-fg} Yes    {red-fg}[N]{/red-fg} No{/center}`);
+confirmDialog.setContent(`{center}Quit NBA Scores?{/center}\n\n{center}{green-fg}[Y/Q]{/green-fg} Yes    {red-fg}[N/Esc]{/red-fg} No{/center}`);
 
 screen.append(menuBar);
 screen.append(header);
@@ -273,7 +273,7 @@ function hideConfirmDialog() {
 }
 
 // Confirm dialog key bindings
-confirmDialog.key(['y', 'Y', 'enter'], () => {
+confirmDialog.key(['y', 'Y', 'q', 'Q', 'enter'], () => {
   process.exit(0);
 });
 
