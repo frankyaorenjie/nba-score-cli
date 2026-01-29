@@ -77,6 +77,26 @@ async function fetchScores() {
   }
 }
 
+function parseGameClock(clockStr) {
+  if (!clockStr) return { minutes: 0, seconds: 0 };
+
+  // Handle ISO 8601 duration format: PT05M30.00S
+  const isoMatch = clockStr.match(/PT(\d+)M([\d.]+)S/);
+  if (isoMatch) {
+    const minutes = parseInt(isoMatch[1]) || 0;
+    const seconds = parseFloat(isoMatch[2]) || 0;
+    return { minutes, seconds };
+  }
+
+  // Handle MM:SS format
+  const parts = clockStr.replace(/[^\d:]/g, '').split(':');
+  if (parts.length === 2) {
+    return { minutes: parseInt(parts[0]) || 0, seconds: parseFloat(parts[1]) || 0 };
+  }
+
+  return { minutes: 0, seconds: 0 };
+}
+
 function formatGameStatus(game) {
   const status = game.gameStatus;
   if (status === 1) {
@@ -88,12 +108,44 @@ function formatGameStatus(game) {
     return `{gray-fg}Starts at ${gameTime}{/gray-fg}`;
   } else if (status === 2) {
     const period = game.period;
-    const clock = game.gameClock || '';
+    const { minutes, seconds } = parseGameClock(game.gameClock);
+
+    // Check for end of quarter (clock at 0:00)
+    if (minutes === 0 && seconds === 0) {
+      if (period === 2) {
+        return `{yellow-fg}Halftime{/yellow-fg}`;
+      } else if (period <= 4) {
+        return `{yellow-fg}End of Q${period}{/yellow-fg}`;
+      } else {
+        return `{yellow-fg}End of OT${period - 4}{/yellow-fg}`;
+      }
+    }
+
     const periodName = period <= 4 ? `Q${period}` : `OT${period - 4}`;
-    return `{red-fg}{bold}LIVE{/bold} ${periodName} ${clock}{/red-fg}`;
+
+    if (minutes < 1) {
+      // Less than 1 minute: use period separator, red highlight
+      const wholeSec = Math.floor(seconds).toString().padStart(2, '0');
+      const decimalPart = Math.round((seconds % 1) * 100).toString().padStart(2, '0');
+      return `{red-fg}${periodName} ${wholeSec}.${decimalPart}{/red-fg}`;
+    } else {
+      // More than 1 minute: use colon separator
+      const minDisplay = minutes.toString().padStart(2, '0');
+      const secDisplay = Math.floor(seconds).toString().padStart(2, '0');
+      return `${periodName} ${minDisplay}:${secDisplay}`;
+    }
   } else {
     return `{green-fg}Final{/green-fg}`;
   }
+}
+
+function formatPlayerName(fullName) {
+  if (!fullName) return '';
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const firstName = parts[0];
+  const lastName = parts.slice(1).join(' ');
+  return `${firstName[0]}. ${lastName}`;
 }
 
 function getGameMVP(game) {
@@ -112,35 +164,53 @@ function getGameMVP(game) {
   const homePts = parseInt(homeLeader.points) || 0;
   const awayPts = parseInt(awayLeader.points) || 0;
 
-  if (homePts >= awayPts) {
-    return { name: homeLeader.name, points: homePts };
-  }
-  return { name: awayLeader.name, points: awayPts };
+  const leader = homePts >= awayPts ? homeLeader : awayLeader;
+  const team = homePts >= awayPts ? game.homeTeam.teamTricode : game.awayTeam.teamTricode;
+
+  const pts = parseInt(leader.points) || 0;
+  const reb = parseInt(leader.rebounds) || 0;
+  const ast = parseInt(leader.assists) || 0;
+
+  return {
+    name: formatPlayerName(leader.name),
+    jerseyNum: leader.jerseyNum || '',
+    team,
+    pts,
+    reb,
+    ast
+  };
 }
 
 function buildGameRow(game) {
   const away = game.awayTeam;
   const home = game.homeTeam;
   const gameStarted = game.gameStatus !== 1;
-  const gameEnded = game.gameStatus === 3;
 
   const awayAbbr = away.teamTricode;
   const homeAbbr = home.teamTricode;
   const awayScore = gameStarted ? String(away.score).padStart(3) : '  -';
   const homeScore = gameStarted ? String(home.score).padStart(3) : '  -';
 
-  const awayWon = gameEnded && away.score > home.score;
-  const homeWon = gameEnded && home.score > away.score;
+  const awayLeading = gameStarted && away.score > home.score;
+  const homeLeading = gameStarted && home.score > away.score;
 
-  let awayDisplay = awayWon ? `{bold}{white-fg}${awayAbbr} ${awayScore}{/white-fg}{/bold}` : `{gray-fg}${awayAbbr} ${awayScore}{/gray-fg}`;
-  let homeDisplay = homeWon ? `{bold}{white-fg}${homeAbbr} ${homeScore}{/white-fg}{/bold}` : `{gray-fg}${homeAbbr} ${homeScore}{/gray-fg}`;
+  let awayDisplay = awayLeading ? `{bold}{white-fg}${awayAbbr} ${awayScore}{/white-fg}{/bold}` : `{gray-fg}${awayAbbr} ${awayScore}{/gray-fg}`;
+  let homeDisplay = homeLeading ? `{bold}{white-fg}${homeAbbr} ${homeScore}{/white-fg}{/bold}` : `{gray-fg}${homeAbbr} ${homeScore}{/gray-fg}`;
 
   const scoreCol = `${awayDisplay}  -  ${homeDisplay}`;
 
   const status = formatGameStatus(game);
 
   const mvp = getGameMVP(game);
-  const mvpCol = mvp ? `{yellow-fg}${mvp.name} (${mvp.points} PTS){/yellow-fg}` : '';
+  let mvpCol = '';
+  if (mvp) {
+    const stats = [`${mvp.pts} PTS`];
+    if (mvp.reb >= 5) stats.push(`${mvp.reb} REB`);
+    if (mvp.ast >= 5) stats.push(`${mvp.ast} AST`);
+    const statsStr = stats.slice(0, 3).join(', ');
+    const jerseyStr = mvp.jerseyNum ? ` #${mvp.jerseyNum}` : '';
+    mvpCol = `{yellow-fg}${mvp.name}${jerseyStr} - ${mvp.team} (${statsStr}){/yellow-fg}`;
+  }
 
   return { scoreCol, status, mvpCol };
 }
@@ -173,15 +243,19 @@ function renderScores(data) {
     return;
   }
 
+  const tableWidth = 90;
+  const leftPad = Math.max(0, Math.floor((screen.width - tableWidth) / 2));
+  const pad = ' '.repeat(leftPad);
+
   let content = '\n';
-  content += `  {bold}${'SCORE'.padEnd(24)}${'STATUS'.padEnd(18)}${'TOP PERFORMER'}{/bold}\n`;
-  content += `  {gray-fg}${'─'.repeat(70)}{/gray-fg}\n`;
+  content += `${pad}{bold}${'SCORE'.padEnd(30)}${'STATUS'.padEnd(24)}${'TOP PERFORMER'}{/bold}\n`;
+  content += `${pad}{gray-fg}${'─'.repeat(tableWidth)}{/gray-fg}\n`;
 
   for (const game of games) {
     const row = buildGameRow(game);
-    const scoreFormatted = padWithTags(row.scoreCol, 24);
-    const statusFormatted = padWithTags(row.status, 18);
-    content += `  ${scoreFormatted}${statusFormatted}${row.mvpCol}\n`;
+    const scoreFormatted = padWithTags(row.scoreCol, 30);
+    const statusFormatted = padWithTags(row.status, 24);
+    content += `${pad}${scoreFormatted}${statusFormatted}${row.mvpCol}\n`;
   }
 
   scoreList.setContent(content);
@@ -190,19 +264,18 @@ function renderScores(data) {
 
 function updateFooter() {
   const now = new Date().toLocaleTimeString('en-US', {
-    hour: 'numeric',
+    hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: true
+    hour12: false
   });
-  footer.setContent(`{center}Last updated: ${now} | Refreshes every 5s | Press q to quit{/center}`);
+  footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | q to quit{/center}`);
   screen.render();
 }
 
 async function refresh() {
   const data = await fetchScores();
   renderScores(data);
-  updateFooter();
 }
 
 async function main() {
@@ -211,6 +284,8 @@ async function main() {
 
   await refresh();
   setInterval(refresh, REFRESH_INTERVAL);
+  setInterval(updateFooter, 1000);
+  updateFooter();
 }
 
 main();
