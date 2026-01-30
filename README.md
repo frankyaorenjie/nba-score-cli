@@ -79,49 +79,13 @@ node index.js
 ## Screenshots
 
 ### Scores View
-```
- [1] Scores   [2] Standings
-
-              NBA Scores - 2025-01-29
-  SCORE                   STATUS            TOP PERFORMER
-  ──────────────────────────────────────────────────────────
-  POR 111  -  WAS 115     Final             J. Poole (39 PTS)
-  SAC  87  -  NYK 103     Final             J. Brunson (33 PTS)
-  GSW  87  -  LAL  92     Q3 04:32          L. James (28 PTS)
-```
+<img width="1520" height="638" alt="image" src="https://github.com/user-attachments/assets/b1d5a2ce-9c79-440d-a65f-eece76433f84" />
 
 ### Standings View
-```
- [1] Scores   [2] Standings
-
-           EASTERN CONFERENCE              WESTERN CONFERENCE
-  #  TEAM   W-L   PCT   GB        #  TEAM   W-L   PCT   GB
-  ────────────────────────────    ────────────────────────────
-  1. CLE  36-9  .800  -           1. OKC  36-8  .818  -
-  2. BOS  32-14 .696  4.5         2. HOU  32-14 .696  5.0
-  ...
-```
+<img width="1410" height="960" alt="image" src="https://github.com/user-attachments/assets/bff130d9-5395-4b09-83c7-b804a9d14b79" />
 
 ### Game Detail View
-```
-         GSW 102  -  LAL 108  |  Final
-
-  ┌─ Game Flow ─────────────────────────────────┐
-  │  12 Lead Changes                            │
-  │  +10 │      ○○                              │
-  │    0 │────────────○───────────              │
-  │  -10 │              ○○○○○                   │
-  │      └──────────────────────                │
-  │       Q1    Q2    Q3    Q4                  │
-  └─────────────────────────────────────────────┘
-  ┌─ Box Score (focused) ───────────────────────┐
-  │  PLAYER             MIN  PTS  REB  AST  ... │
-  │  L. James           38   32   8    11   ... │
-  │  A. Davis           36   28   14   3    ... │
-  └─────────────────────────────────────────────┘
-
-  ● [Box Score] | jk/↑↓ scroll | Tab switch section | q/Esc back
-```
+<img width="1546" height="1812" alt="image" src="https://github.com/user-attachments/assets/1d120c79-2e6f-46d9-8e12-2c311c5007a8" />
 
 ## Data Sources
 
