@@ -5,6 +5,7 @@ const notifier = require('node-notifier');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { exec } = require('child_process');
 
 const NBA_API_URL = 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json';
 const BOXSCORE_URL = 'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_GAMEID.json';
@@ -16,6 +17,7 @@ const SUBSCRIPTIONS_FILE = path.join(os.homedir(), '.nba-score-tui-subscriptions
 const REFRESH_INTERVAL = 5000;
 const STANDINGS_REFRESH_INTERVAL = 60000;
 const NEWS_REFRESH_INTERVAL = 60000;
+const UPDATE_CHECK_INTERVAL = 3600000; // Check for updates every hour
 
 const TEAM_ABBR_MAP = {
   'GS': 'GSW',
@@ -111,6 +113,72 @@ function checkSubscribedPlayerTransactions(transactions) {
   }
 }
 
+function execPromise(command, options = {}) {
+  return new Promise((resolve, reject) => {
+    exec(command, { cwd: appDirectory, ...options }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+  });
+}
+
+async function checkForUpdates() {
+  try {
+    // Fetch latest from remote
+    await execPromise('git fetch origin main');
+
+    // Get local and remote commit hashes
+    const localHash = await execPromise('git rev-parse HEAD');
+    const remoteHash = await execPromise('git rev-parse origin/main');
+
+    if (localHash !== remoteHash) {
+      // Get commit count behind
+      const behindCount = await execPromise('git rev-list HEAD..origin/main --count');
+      const count = parseInt(behindCount) || 0;
+
+      if (count > 0 && !updateAvailable) {
+        updateAvailable = true;
+        notifier.notify({
+          title: 'NBA Score TUI Update Available',
+          message: `${count} new update(s) available. Press 'u' to update.`,
+          sound: true
+        });
+        updateFooter();
+      }
+    }
+  } catch (error) {
+    // Silently ignore update check errors (e.g., no git, no network)
+  }
+}
+
+async function performUpdate() {
+  try {
+    // Pull latest changes
+    await execPromise('git pull origin main');
+
+    // Notify user
+    notifier.notify({
+      title: 'NBA Score TUI Updated',
+      message: 'Update complete. Please restart the app to apply changes.',
+      sound: true
+    });
+
+    updateAvailable = false;
+
+    // Show restart dialog
+    showUpdateCompleteDialog();
+  } catch (error) {
+    notifier.notify({
+      title: 'Update Failed',
+      message: `Error: ${error.message}`,
+      sound: true
+    });
+  }
+}
+
 function toNumber(value, fallback = 0) {
   const n = typeof value === 'number' ? value : parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
@@ -132,6 +200,8 @@ let subscribedPlayers = []; // Array of {id, name}
 let notifiedTransactions = new Set(); // Track notified transactions to avoid duplicates
 let searchResults = []; // Current player search results
 let transactionsFocusLeft = true; // Track which panel is focused
+let updateAvailable = false; // Track if update is available
+let appDirectory = __dirname; // App installation directory
 
 const TEAM_COLORS = {
   'ATL': '#FF4D4F', 'BKN': '#FFFFFF', 'BOS': '#00FF66', 'CHA': '#4B2BBF', 'CHI': '#FF2D55',
@@ -447,6 +517,26 @@ const confirmDialog = blessed.box({
 
 confirmDialog.setContent(`{center}Quit NBA Scores?{/center}\n\n{center}{green-fg}[Y/Q]{/green-fg} Yes    {red-fg}[N/Esc]{/red-fg} No{/center}`);
 
+// Update complete dialog
+const updateCompleteDialog = blessed.box({
+  top: 'center',
+  left: 'center',
+  width: 50,
+  height: 9,
+  tags: true,
+  hidden: true,
+  border: {
+    type: 'line'
+  },
+  style: {
+    fg: 'white',
+    bg: 'black',
+    border: { fg: 'green' }
+  }
+});
+
+updateCompleteDialog.setContent(`{center}{green-fg}Update Complete!{/green-fg}{/center}\n\n{center}Please restart the app to apply changes.{/center}\n\n{center}{green-fg}[R]{/green-fg} Restart    {yellow-fg}[L]{/yellow-fg} Later{/center}`);
+
 screen.append(menuBar);
 screen.append(header);
 screen.append(gameList);
@@ -459,8 +549,10 @@ screen.append(gameFlowBox);
 screen.append(boxScoreBox);
 screen.append(detailFooter);
 screen.append(confirmDialog);
+screen.append(updateCompleteDialog);
 
 let confirmVisible = false;
+let updateDialogVisible = false;
 
 function showConfirmDialog() {
   confirmVisible = true;
@@ -482,6 +574,26 @@ function hideConfirmDialog() {
   screen.render();
 }
 
+function showUpdateCompleteDialog() {
+  updateDialogVisible = true;
+  updateCompleteDialog.show();
+  updateCompleteDialog.focus();
+  screen.render();
+}
+
+function hideUpdateCompleteDialog() {
+  updateDialogVisible = false;
+  updateCompleteDialog.hide();
+  if (mainView === 'scores') {
+    gameList.focus();
+  } else if (mainView === 'standings') {
+    standingsContent.focus();
+  } else {
+    transactionsLeftPanel.focus();
+  }
+  screen.render();
+}
+
 // Confirm dialog key bindings
 confirmDialog.key(['y', 'Y', 'q', 'Q', 'enter'], () => {
   process.exit(0);
@@ -489,6 +601,22 @@ confirmDialog.key(['y', 'Y', 'q', 'Q', 'enter'], () => {
 
 confirmDialog.key(['n', 'N', 'escape'], () => {
   hideConfirmDialog();
+});
+
+// Update complete dialog key bindings
+updateCompleteDialog.key(['r', 'R'], () => {
+  // Restart the app
+  const { spawn } = require('child_process');
+  spawn(process.argv[0], process.argv.slice(1), {
+    cwd: appDirectory,
+    detached: true,
+    stdio: 'inherit'
+  }).unref();
+  process.exit(0);
+});
+
+updateCompleteDialog.key(['l', 'L', 'escape'], () => {
+  hideUpdateCompleteDialog();
 });
 
 // Key bindings
@@ -511,6 +639,17 @@ screen.key(['q'], () => {
 
 screen.key(['C-c'], () => {
   process.exit(0);
+});
+
+// Update key binding
+screen.key(['u', 'U'], () => {
+  if (confirmVisible || updateDialogVisible || detailView) return;
+  if (updateAvailable) {
+    performUpdate();
+  } else {
+    // Manual check for updates
+    checkForUpdates();
+  }
 });
 
 gameList.key(['space', 'enter'], () => {
@@ -1543,12 +1682,13 @@ function updateFooter() {
     second: '2-digit',
     hour12: false
   });
+  const updateIndicator = updateAvailable ? ' | {yellow-fg}[U] Update available{/yellow-fg}' : '';
   if (mainView === 'scores') {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ navigate | SPACE details | hl/←→/1-3 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ navigate | SPACE details | 1-3 views${updateIndicator} | q quit{/center}`);
   } else if (mainView === 'tradeNews') {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | Tab switch panels | Enter subscribe/remove | 1-3 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | Tab panels | Enter subscribe${updateIndicator} | q quit{/center}`);
   } else {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ scroll | hl/←→/1-3 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ scroll | 1-3 views${updateIndicator} | q quit{/center}`);
   }
   screen.render();
 }
@@ -1615,6 +1755,10 @@ async function main() {
   setInterval(refreshTradeNews, NEWS_REFRESH_INTERVAL);
   setInterval(updateFooter, 1000);
   updateFooter();
+
+  // Check for updates on startup and periodically
+  checkForUpdates();
+  setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
 
   gameList.focus();
   gameList.select(2); // Start at first game row

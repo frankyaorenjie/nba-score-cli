@@ -45,6 +45,12 @@ A terminal UI (TUI) application that displays live NBA scores, standings, and ga
 - Switch between Game Flow and Box Score sections with Tab
 - Active section highlighted with yellow border
 
+### Auto-Update
+- Automatically checks for updates from GitHub every hour
+- Desktop notification when update is available
+- Press `u` to update, then `r` to restart with new version
+- Manual update check also available by pressing `u`
+
 ## Installation
 
 ```bash
@@ -75,6 +81,7 @@ node index.js
 | `j` / `↓` | Move down / Scroll |
 | `k` / `↑` | Move up / Scroll |
 | `Space` / `Enter` | Open game details (from Scores) |
+| `u` | Check for updates / Install update |
 | `q` | Quit (with confirmation) |
 | `Ctrl+C` | Quit immediately |
 
