@@ -6,16 +6,22 @@
   "bin": {
     "nba-scores": "./index.js"
   },
-    "scripts": {
+  "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
   },
-  "keywords": ["nba", "scores", "cli", "basketball"],
+  "keywords": [
+    "nba",
+    "scores",
+    "cli",
+    "basketball"
+  ],
   "license": "MIT",
   "dependencies": {
-    "blessed": "^0.1.81"
+    "blessed": "^0.1.81",
+    "node-notifier": "^10.0.1"
   }
 }

@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 
 const blessed = require('blessed');
+const notifier = require('node-notifier');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const NBA_API_URL = 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json';
 const BOXSCORE_URL = 'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_GAMEID.json';
 const PLAYBYPLAY_URL = 'https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_GAMEID.json';
 const ESPN_STANDINGS_URL = 'https://site.api.espn.com/apis/v2/sports/basketball/nba/standings';
+const ESPN_TRANSACTIONS_BASE_URL = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/transactions';
+const ESPN_PLAYER_SEARCH_URL = 'https://site.web.api.espn.com/apis/common/v3/search?type=player&sport=basketball&league=nba&limit=10&query=';
+const SUBSCRIPTIONS_FILE = path.join(os.homedir(), '.nba-score-tui-subscriptions.json');
 const REFRESH_INTERVAL = 5000;
 const STANDINGS_REFRESH_INTERVAL = 60000;
+const NEWS_REFRESH_INTERVAL = 60000;
 
 const TEAM_ABBR_MAP = {
   'GS': 'GSW',
@@ -22,6 +30,87 @@ function normalizeTeamAbbr(abbr) {
   return TEAM_ABBR_MAP[abbr] || abbr;
 }
 
+function loadSubscriptions() {
+  try {
+    if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
+      const data = fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf8');
+      subscribedPlayers = JSON.parse(data);
+    }
+  } catch (error) {
+    subscribedPlayers = [];
+  }
+}
+
+function saveSubscriptions() {
+  try {
+    fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(subscribedPlayers, null, 2));
+  } catch (error) {
+    // Ignore save errors
+  }
+}
+
+function addSubscription(player) {
+  if (!subscribedPlayers.find(p => p.id === player.id)) {
+    subscribedPlayers.push(player);
+    saveSubscriptions();
+    return true;
+  }
+  return false;
+}
+
+function removeSubscription(playerId) {
+  const index = subscribedPlayers.findIndex(p => p.id === playerId);
+  if (index !== -1) {
+    subscribedPlayers.splice(index, 1);
+    saveSubscriptions();
+    return true;
+  }
+  return false;
+}
+
+async function searchPlayers(query) {
+  if (!query || query.length < 2) return [];
+  try {
+    const response = await fetch(ESPN_PLAYER_SEARCH_URL + encodeURIComponent(query));
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.items || []).map(item => ({
+      id: item.id,
+      name: item.displayName,
+      shortName: item.shortName
+    }));
+  } catch (error) {
+    return [];
+  }
+}
+
+function checkSubscribedPlayerTransactions(transactions) {
+  if (!transactions || subscribedPlayers.length === 0) return;
+
+  for (const tx of transactions) {
+    const desc = tx.description || '';
+    const txKey = `${tx.date}-${tx.team?.abbreviation}-${desc}`;
+
+    if (notifiedTransactions.has(txKey)) continue;
+
+    for (const player of subscribedPlayers) {
+      // Check if player name appears in transaction
+      const playerNames = [player.name, player.shortName].filter(Boolean);
+      for (const name of playerNames) {
+        if (desc.includes(name)) {
+          notifiedTransactions.add(txKey);
+          notifier.notify({
+            title: 'NBA Transaction Alert',
+            message: `${player.name}: ${desc}`,
+            sound: true
+          });
+          break;
+        }
+      }
+    }
+  }
+}
+
 function toNumber(value, fallback = 0) {
   const n = typeof value === 'number' ? value : parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
@@ -33,11 +122,16 @@ function formatWinPct(value) {
 }
 
 let currentGames = [];
-let mainView = 'scores'; // 'scores' or 'standings'
+let mainView = 'scores'; // 'scores', 'standings', or 'tradeNews'
 let detailView = null; // null or gameId when viewing game details
 let detailFocus = 'boxScore'; // 'gameFlow' or 'boxScore'
 let scoresData = null;
 let standingsData = null;
+let tradeNewsData = null;
+let subscribedPlayers = []; // Array of {id, name}
+let notifiedTransactions = new Set(); // Track notified transactions to avoid duplicates
+let searchResults = []; // Current player search results
+let transactionsFocusLeft = true; // Track which panel is focused
 
 const TEAM_COLORS = {
   'ATL': '#FF4D4F', 'BKN': '#FFFFFF', 'BOS': '#00FF66', 'CHA': '#4B2BBF', 'CHI': '#FF2D55',
@@ -125,6 +219,118 @@ const standingsContent = blessed.box({
     bg: 'black'
   }
 });
+
+// Transactions view - left panel (transactions list)
+const transactionsLeftPanel = blessed.box({
+  top: 3,
+  left: 0,
+  width: '70%',
+  height: '100%-6',
+  keys: true,
+  vi: true,
+  mouse: true,
+  tags: true,
+  scrollable: true,
+  hidden: true,
+  scrollbar: {
+    ch: ' ',
+    style: { bg: 'yellow' }
+  },
+  border: {
+    type: 'line'
+  },
+  label: ' Transactions ',
+  style: {
+    fg: 'white',
+    bg: 'black',
+    border: { fg: 'cyan' }
+  }
+});
+
+// Transactions view - right panel (subscriptions)
+const transactionsRightPanel = blessed.box({
+  top: 3,
+  left: '70%',
+  width: '30%',
+  height: '100%-6',
+  tags: true,
+  hidden: true,
+  border: {
+    type: 'line'
+  },
+  label: ' Watch List ',
+  style: {
+    fg: 'white',
+    bg: 'black',
+    border: { fg: 'gray' }
+  }
+});
+
+// Subscribed players list
+const subscribedList = blessed.list({
+  top: 0,
+  left: 0,
+  width: '100%-2',
+  height: '50%-1',
+  keys: true,
+  vi: true,
+  mouse: true,
+  tags: true,
+  scrollable: true,
+  style: {
+    fg: 'white',
+    bg: 'black',
+    selected: {
+      fg: 'black',
+      bg: 'yellow'
+    }
+  }
+});
+
+// Search input
+const searchInput = blessed.textbox({
+  top: '50%',
+  left: 0,
+  width: '100%-2',
+  height: 3,
+  keys: true,
+  mouse: true,
+  inputOnFocus: true,
+  border: {
+    type: 'line'
+  },
+  label: ' Search Player (Enter to search) ',
+  style: {
+    fg: 'white',
+    bg: 'black',
+    border: { fg: 'green' }
+  }
+});
+
+// Search results dropdown
+const searchResultsList = blessed.list({
+  top: '50%+3',
+  left: 0,
+  width: '100%-2',
+  height: '50%-4',
+  keys: true,
+  vi: true,
+  mouse: true,
+  tags: true,
+  scrollable: true,
+  style: {
+    fg: 'white',
+    bg: 'black',
+    selected: {
+      fg: 'black',
+      bg: 'green'
+    }
+  }
+});
+
+transactionsRightPanel.append(subscribedList);
+transactionsRightPanel.append(searchInput);
+transactionsRightPanel.append(searchResultsList);
 
 const footer = blessed.box({
   bottom: 0,
@@ -245,6 +451,8 @@ screen.append(menuBar);
 screen.append(header);
 screen.append(gameList);
 screen.append(standingsContent);
+screen.append(transactionsLeftPanel);
+screen.append(transactionsRightPanel);
 screen.append(footer);
 screen.append(detailHeader);
 screen.append(gameFlowBox);
@@ -266,8 +474,10 @@ function hideConfirmDialog() {
   confirmDialog.hide();
   if (mainView === 'scores') {
     gameList.focus();
-  } else {
+  } else if (mainView === 'standings') {
     standingsContent.focus();
+  } else {
+    transactionsLeftPanel.focus();
   }
   screen.render();
 }
@@ -333,6 +543,21 @@ boxScoreBox.on('click', () => {
   }
 });
 
+// Click to focus transaction panels
+transactionsLeftPanel.on('click', () => {
+  if (!transactionsFocusLeft) {
+    transactionsFocusLeft = true;
+    updateTransactionsPanelFocus();
+  }
+});
+
+transactionsRightPanel.on('click', () => {
+  if (transactionsFocusLeft) {
+    transactionsFocusLeft = false;
+    updateTransactionsPanelFocus();
+  }
+});
+
 // Function to update detail view focus and highlight
 function updateDetailFocus() {
   if (detailFocus === 'gameFlow') {
@@ -353,25 +578,125 @@ function updateDetailFooter() {
   detailFooter.setContent(`{center}{green-fg}●{/green-fg} {yellow-fg}[${section}]{/yellow-fg} | jk/↑↓ scroll | Tab switch section | q/Esc back{/center}`);
 }
 
-// Tab to switch focus between sections in detail view
+// Tab to switch focus between sections
 screen.key(['tab'], () => {
-  if (!detailView) return;
-  detailFocus = detailFocus === 'gameFlow' ? 'boxScore' : 'gameFlow';
-  updateDetailFocus();
+  if (detailView) {
+    detailFocus = detailFocus === 'gameFlow' ? 'boxScore' : 'gameFlow';
+    updateDetailFocus();
+  } else if (mainView === 'tradeNews') {
+    transactionsFocusLeft = !transactionsFocusLeft;
+    updateTransactionsPanelFocus();
+  }
 });
 
-screen.key(['1', 'left', 'h'], () => {
+screen.key(['1'], () => {
   if (confirmVisible || detailView) return;
   mainView = 'scores';
   updateMenu();
   renderCurrentView();
 });
 
-screen.key(['2', 'right', 'l'], () => {
+screen.key(['left', 'h'], () => {
+  if (confirmVisible || detailView) return;
+  if (mainView === 'standings') {
+    mainView = 'scores';
+  } else if (mainView === 'tradeNews') {
+    mainView = 'standings';
+  }
+  updateMenu();
+  renderCurrentView();
+});
+
+screen.key(['2'], () => {
   if (confirmVisible || detailView) return;
   mainView = 'standings';
   updateMenu();
   renderCurrentView();
+});
+
+screen.key(['3'], () => {
+  if (confirmVisible || detailView) return;
+  mainView = 'tradeNews';
+  updateMenu();
+  renderCurrentView();
+});
+
+screen.key(['right', 'l'], () => {
+  if (confirmVisible || detailView) return;
+  if (mainView === 'scores') {
+    mainView = 'standings';
+  } else if (mainView === 'standings') {
+    mainView = 'tradeNews';
+  }
+  updateMenu();
+  renderCurrentView();
+});
+
+// Search input submit handler
+searchInput.on('submit', async (value) => {
+  if (value && value.length >= 2) {
+    // Show loading status
+    searchResultsList.setItems(['{yellow-fg}Searching...{/yellow-fg}']);
+    screen.render();
+
+    searchResults = await searchPlayers(value);
+
+    if (searchResults.length === 0) {
+      searchResultsList.setItems(['{gray-fg}No players found{/gray-fg}']);
+    } else {
+      renderSubscriptionPanel();
+      searchResultsList.focus();
+      searchResultsList.select(0);
+    }
+    screen.render();
+  }
+});
+
+// Search input cancel
+searchInput.key(['escape'], () => {
+  searchInput.clearValue();
+  transactionsFocusLeft = true;
+  updateTransactionsPanelFocus();
+});
+
+// Search results - select player to subscribe
+searchResultsList.on('select', (item, index) => {
+  if (searchResults[index]) {
+    const player = searchResults[index];
+    if (addSubscription(player)) {
+      renderSubscriptionPanel();
+      // Send mock notification to preview
+      notifier.notify({
+        title: 'Player Subscribed',
+        message: `You will be notified when ${player.name} appears in transactions.`,
+        sound: true
+      });
+    }
+  }
+});
+
+searchResultsList.key(['escape'], () => {
+  searchInput.focus();
+});
+
+// Subscribed list - remove player
+subscribedList.on('select', (item, index) => {
+  if (subscribedPlayers[index]) {
+    removeSubscription(subscribedPlayers[index].id);
+    renderSubscriptionPanel();
+  }
+});
+
+subscribedList.key(['escape', 'd', 'backspace'], () => {
+  const index = subscribedList.selected;
+  if (subscribedPlayers[index]) {
+    removeSubscription(subscribedPlayers[index].id);
+    renderSubscriptionPanel();
+  }
+});
+
+subscribedList.key(['tab'], () => {
+  searchInput.focus();
 });
 
 function updateMenu() {
@@ -379,8 +704,10 @@ function updateMenu() {
   const scoresEnd = mainView === 'scores' ? '{/black-fg}{/white-bg}{/bold}' : '{/white-fg}';
   const standingsStyle = mainView === 'standings' ? '{bold}{white-bg}{black-fg}' : '{white-fg}';
   const standingsEnd = mainView === 'standings' ? '{/black-fg}{/white-bg}{/bold}' : '{/white-fg}';
+  const newsStyle = mainView === 'tradeNews' ? '{bold}{white-bg}{black-fg}' : '{white-fg}';
+  const newsEnd = mainView === 'tradeNews' ? '{/black-fg}{/white-bg}{/bold}' : '{/white-fg}';
 
-  menuBar.setContent(` ${scoresStyle} [1] Scores ${scoresEnd}  ${standingsStyle} [2] Standings ${standingsEnd}`);
+  menuBar.setContent(` ${scoresStyle} [1] Scores ${scoresEnd}  ${standingsStyle} [2] Standings ${standingsEnd}  ${newsStyle} [3] Transactions ${newsEnd}`);
   screen.render();
 }
 
@@ -419,6 +746,35 @@ async function fetchPlayByPlay(gameId) {
 async function fetchStandings() {
   try {
     const response = await fetch(ESPN_STANDINGS_URL);
+    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+function getTransactionsUrl() {
+  const today = new Date();
+  const threeMonthsAgo = new Date(today);
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+
+  const formatDate = (d) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+  };
+
+  const startDate = formatDate(threeMonthsAgo);
+  const endDate = formatDate(today);
+
+  return `${ESPN_TRANSACTIONS_BASE_URL}?dates=${startDate}-${endDate}&limit=500`;
+}
+
+async function fetchTradeNews() {
+  try {
+    const url = getTransactionsUrl();
+    const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
     return await response.json();
   } catch (error) {
@@ -695,6 +1051,120 @@ function renderStandingsView() {
   screen.render();
 }
 
+function renderTradeNewsView() {
+  const data = tradeNewsData;
+
+  const season = data?.season?.displayName || '2025-26';
+  header.setContent(`{center}NBA Transactions - ${season} Season{/center}`);
+
+  if (!data) {
+    transactionsLeftPanel.setContent('\n{center}{red-fg}Loading transactions...{/red-fg}{/center}');
+    screen.render();
+    return;
+  }
+
+  const transactions = data.transactions;
+  if (!transactions || transactions.length === 0) {
+    transactionsLeftPanel.setContent('\n{center}{gray-fg}No recent transactions{/gray-fg}{/center}');
+    screen.render();
+    return;
+  }
+
+  const pad = ' ';
+
+  // Group all transactions by date
+  const txByDate = new Map();
+
+  for (const tx of transactions) {
+    const desc = tx.description;
+    const teamAbbr = normalizeTeamAbbr(tx.team?.abbreviation || '');
+    const date = tx.date;
+    const dateKey = date.split('T')[0];
+
+    if (!txByDate.has(dateKey)) {
+      txByDate.set(dateKey, []);
+    }
+    txByDate.get(dateKey).push({ desc, teamAbbr, date });
+  }
+
+  let content = '\n';
+
+  // Sort dates descending (most recent first)
+  const sortedDates = Array.from(txByDate.keys()).sort((a, b) => b.localeCompare(a));
+
+  for (const dateKey of sortedDates) {
+    const txList = txByDate.get(dateKey);
+    const date = new Date(dateKey + 'T12:00:00Z');
+    const dateStr = date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    content += `${pad}{bold}{white-fg}${dateStr}{/white-fg}{/bold}\n`;
+    content += `${pad}{gray-fg}${'─'.repeat(60)}{/gray-fg}\n`;
+
+    for (const tx of txList) {
+      // Color code by transaction type
+      let typeColor = '{white-fg}';
+      let typeEnd = '{/white-fg}';
+      if (tx.desc.includes('Acquired')) {
+        typeColor = '{yellow-fg}';
+        typeEnd = '{/yellow-fg}';
+      } else if (tx.desc.includes('Waived')) {
+        typeColor = '{red-fg}';
+        typeEnd = '{/red-fg}';
+      } else if (tx.desc.includes('Signed')) {
+        typeColor = '{green-fg}';
+        typeEnd = '{/green-fg}';
+      }
+
+      content += `${pad}  {cyan-fg}${tx.teamAbbr.padEnd(4)}{/cyan-fg} ${typeColor}${tx.desc}${typeEnd}\n`;
+    }
+
+    content += '\n';
+  }
+
+  transactionsLeftPanel.setContent(content);
+  screen.render();
+}
+
+function renderSubscriptionPanel() {
+  // Update subscribed players list
+  if (subscribedPlayers.length === 0) {
+    subscribedList.setItems(['{gray-fg}No players subscribed{/gray-fg}', '{gray-fg}Search below to add{/gray-fg}']);
+  } else {
+    const items = subscribedPlayers.map(p => `{yellow-fg}${p.name}{/yellow-fg}`);
+    subscribedList.setItems(items);
+  }
+
+  // Update search results
+  if (searchResults.length === 0) {
+    searchResultsList.setItems(['{gray-fg}Type to search players{/gray-fg}']);
+  } else {
+    const items = searchResults.map(p => {
+      const subscribed = subscribedPlayers.find(s => s.id === p.id);
+      return subscribed ? `{green-fg}✓{/green-fg} ${p.name}` : `  ${p.name}`;
+    });
+    searchResultsList.setItems(items);
+  }
+
+  screen.render();
+}
+
+function updateTransactionsPanelFocus() {
+  if (transactionsFocusLeft) {
+    transactionsLeftPanel.style.border.fg = 'yellow';
+    transactionsRightPanel.style.border.fg = 'gray';
+    transactionsLeftPanel.focus();
+  } else {
+    transactionsLeftPanel.style.border.fg = 'cyan';
+    transactionsRightPanel.style.border.fg = 'yellow';
+    searchInput.focus();
+  }
+  screen.render();
+}
+
 function renderGameFlow(boxScore, playByPlay) {
   const game = boxScore.game;
   const homeTeam = game.homeTeam.teamTricode;
@@ -965,6 +1435,8 @@ async function showDetailView(game) {
   header.hide();
   gameList.hide();
   standingsContent.hide();
+  transactionsLeftPanel.hide();
+  transactionsRightPanel.hide();
   footer.hide();
 
   // Show detail view
@@ -1018,11 +1490,21 @@ function showListView() {
   if (mainView === 'scores') {
     gameList.show();
     standingsContent.hide();
+    transactionsLeftPanel.hide();
+    transactionsRightPanel.hide();
     gameList.focus();
-  } else {
+  } else if (mainView === 'standings') {
     gameList.hide();
     standingsContent.show();
+    transactionsLeftPanel.hide();
+    transactionsRightPanel.hide();
     standingsContent.focus();
+  } else {
+    gameList.hide();
+    standingsContent.hide();
+    transactionsLeftPanel.show();
+    transactionsRightPanel.show();
+    transactionsLeftPanel.focus();
   }
 
   screen.render();
@@ -1032,13 +1514,25 @@ function renderCurrentView() {
   if (mainView === 'scores') {
     gameList.show();
     standingsContent.hide();
+    transactionsLeftPanel.hide();
+    transactionsRightPanel.hide();
     renderScoresView();
     gameList.focus();
-  } else {
+  } else if (mainView === 'standings') {
     gameList.hide();
     standingsContent.show();
+    transactionsLeftPanel.hide();
+    transactionsRightPanel.hide();
     renderStandingsView();
     standingsContent.focus();
+  } else {
+    gameList.hide();
+    standingsContent.hide();
+    transactionsLeftPanel.show();
+    transactionsRightPanel.show();
+    renderTradeNewsView();
+    renderSubscriptionPanel();
+    transactionsLeftPanel.focus();
   }
 }
 
@@ -1050,9 +1544,11 @@ function updateFooter() {
     hour12: false
   });
   if (mainView === 'scores') {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ navigate | SPACE details | hl/←→/1-2 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ navigate | SPACE details | hl/←→/1-3 switch views | q quit{/center}`);
+  } else if (mainView === 'tradeNews') {
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | Tab switch panels | Enter subscribe/remove | 1-3 switch views | q quit{/center}`);
   } else {
-    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ scroll | hl/←→/1-2 switch views | q quit{/center}`);
+    footer.setContent(`{center}{green-fg}●{/green-fg} ${now} | jk/↑↓ scroll | hl/←→/1-3 switch views | q quit{/center}`);
   }
   screen.render();
 }
@@ -1091,16 +1587,32 @@ async function refreshStandings() {
   }
 }
 
+async function refreshTradeNews() {
+  tradeNewsData = await fetchTradeNews();
+
+  // Check for subscribed player transactions
+  if (tradeNewsData?.transactions) {
+    checkSubscribedPlayerTransactions(tradeNewsData.transactions);
+  }
+
+  if (!detailView && mainView === 'tradeNews') {
+    renderTradeNewsView();
+    renderSubscriptionPanel();
+  }
+}
+
 async function main() {
+  loadSubscriptions();
   updateMenu();
   gameList.setItems(['Loading NBA data...']);
   screen.render();
 
-  await Promise.all([refreshScores(), refreshStandings()]);
+  await Promise.all([refreshScores(), refreshStandings(), refreshTradeNews()]);
   renderCurrentView();
 
   setInterval(refreshScores, REFRESH_INTERVAL);
   setInterval(refreshStandings, STANDINGS_REFRESH_INTERVAL);
+  setInterval(refreshTradeNews, NEWS_REFRESH_INTERVAL);
   setInterval(updateFooter, 1000);
   updateFooter();
 
