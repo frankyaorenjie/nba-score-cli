@@ -1,4 +1,4 @@
-# nba-score-cli
+# nba-score-tui
 
 A terminal UI (TUI) application that displays live NBA scores, standings, and game details with auto-refresh.
 
@@ -36,8 +36,8 @@ A terminal UI (TUI) application that displays live NBA scores, standings, and ga
 ## Installation
 
 ```bash
-git clone https://github.com/frankyaorenjie/nba-score-cli.git
-cd nba-score-cli
+git clone https://github.com/frankyaorenjie/nba-score-tui.git
+cd nba-score-tui
 npm install
 ```
 
