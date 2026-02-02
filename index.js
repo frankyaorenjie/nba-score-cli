@@ -654,8 +654,9 @@ screen.key(['u', 'U'], () => {
 
 gameList.key(['space', 'enter'], () => {
   const selectedIndex = gameList.selected;
-  if (currentGames[selectedIndex]) {
-    showDetailView(currentGames[selectedIndex]);
+  const gameIndex = selectedIndex - 2; // Offset for header rows (header + separator)
+  if (gameIndex >= 0 && currentGames[gameIndex]) {
+    showDetailView(currentGames[gameIndex]);
   }
 });
 
